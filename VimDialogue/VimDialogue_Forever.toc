@@ -1,0 +1,12 @@
+## Interface: 16001
+## Title: Vim Dialogue
+## Notes: Vim keys for dialogue. j and k move, space and enter confirm, escape goes back.
+## Author: Vim Dialogue
+## Version: 1.1.0
+## SavedVariables: VimDialogueDB
+## Category: Quests
+## AllowLoadGameType: forever, camelot
+## ExcludeLoadGameType: standard, classic
+
+Logic.lua
+Core.lua
