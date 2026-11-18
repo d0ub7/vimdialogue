@@ -16,9 +16,10 @@ if type(ADDON) ~= "string" or ADDON == "" then
 end
 
 VimDialogue = VimDialogue or {}
-VimDialogue.version = "1.1.0"
+VimDialogue.version = "1.1.1"
 
 local index = 1
+local chosenReward = nil
 local lastMode = nil
 local lastKeys = nil
 local bindingsOn = false
@@ -330,14 +331,26 @@ local function RewardEntries()
   if not buttons then
     return {}
   end
+  local questID = ""
+  if GetQuestID then
+    local ok, id = pcall(GetQuestID)
+    if ok and id then
+      questID = tostring(id)
+    end
+  end
   local entries = {}
   for i = 1, #buttons do
     local button = buttons[i]
     if Shown(button) and button.type == "choice" then
-      entries[#entries + 1] = {
+      local choice = #entries + 1
+      entries[choice] = {
         kind = "reward",
         button = button,
-        key = "choice:" .. tostring(button:GetID()),
+        choice = choice,
+        -- Position, not GetID. A redraw can report 0 before the button is
+        -- numbered, and that used to look like a brand new list. The quest
+        -- id makes a new turn-in start at the top.
+        key = "choice:" .. questID .. ":" .. tostring(choice),
       }
     end
   end
@@ -492,12 +505,28 @@ local function ActivateGossip(elementData)
   return false
 end
 
-local function SelectReward(button)
+local function SelectReward(button, choice)
   if not button then
     return false
   end
+  -- OnClick stores GetID, and a button that was never numbered stores 0.
+  -- The complete button treats 0 as "nothing picked" and leaves the window up.
+  if choice and choice >= 1 and button.SetID then
+    local id = 0
+    if button.GetID then
+      id = tonumber(button:GetID()) or 0
+    end
+    if id < 1 then
+      button:SetID(choice)
+    end
+  end
   if QuestInfoItem_OnClick then
-    return pcall(QuestInfoItem_OnClick, button)
+    local ok = pcall(QuestInfoItem_OnClick, button)
+    local picked = QuestInfoFrame and tonumber(QuestInfoFrame.itemChoice) or 0
+    if ok and choice and choice >= 1 and picked < 1 and QuestInfoFrame then
+      QuestInfoFrame.itemChoice = choice
+    end
+    return ok
   end
   return Click(button)
 end
@@ -512,6 +541,14 @@ local function EntryButton(entry, scroll)
   return entry.button
 end
 
+local function GameRewardChoice()
+  local frame = QuestInfoFrame
+  if not frame then
+    return nil
+  end
+  return tonumber(frame.itemChoice)
+end
+
 local function Highlight(entry, scroll, chooseReward)
   if applying then
     return
@@ -521,20 +558,117 @@ local function Highlight(entry, scroll, chooseReward)
   -- Selecting a reward from a passive refresh would commit that choice for a
   -- mouse click on Complete. Only the keys do that.
   if chooseReward and entry and entry.kind == "reward" and button then
-    local chosen = QuestInfoFrame and QuestInfoFrame.itemChoice
-    if chosen ~= button:GetID() then
-      SelectReward(button)
+    local id = entry.choice
+    if button.GetID then
+      local got = tonumber(button:GetID()) or 0
+      if got >= 1 then
+        id = got
+      end
+    end
+    if GameRewardChoice() ~= id then
+      SelectReward(button, entry.choice)
     end
   end
   ShowCursor(button, entry and entry.kind ~= "reward")
   applying = false
 end
 
+local function SameKeys(a, b)
+  if type(a) ~= "table" or type(b) ~= "table" or #a ~= #b then
+    return false
+  end
+  for i = 1, #a do
+    if a[i] ~= b[i] then
+      return false
+    end
+  end
+  return true
+end
+
 local function Remember(mode, entries)
-  index = Logic.KeepIndex({ mode = lastMode, keys = lastKeys, index = index }, mode, CopyKeys(entries))
+  -- A click in here can redraw the rewards, and that refresh used to move
+  -- the cursor to the first row while this one was still painting it.
+  if applying then
+    return index, true
+  end
+  local keys = CopyKeys(entries)
+  local state = { mode = lastMode, keys = lastKeys, index = index }
+  local held = Logic.HeldIndex(state, mode, keys)
+  if held then
+    index = held
+    return index, true
+  end
+  if not (mode == "reward" and lastMode == "reward" and SameKeys(lastKeys, keys)) then
+    chosenReward = nil
+  end
+  index = Logic.KeepIndex(state, mode, keys)
   lastMode = mode
-  lastKeys = CopyKeys(entries)
-  return index
+  lastKeys = keys
+  return index, false
+end
+
+local function QuestMoney()
+  if not GetQuestMoneyToGet then
+    return 0
+  end
+  local ok, money = pcall(GetQuestMoneyToGet)
+  if not ok then
+    return 0
+  end
+  return tonumber(money) or 0
+end
+
+local function TurnInReward(entry, choice)
+  if not entry or not entry.button or not choice then
+    return false
+  end
+  applying = true
+  index = choice
+  chosenReward = choice
+  if QuestInfoFrame then
+    QuestInfoFrame.itemChoice = choice
+  end
+  SelectReward(entry.button, choice)
+  ShowCursor(entry.button, false)
+  -- Reading the quest money redraws the rewards, and that draw clears the
+  -- choice. Write it back after the read, then turn the quest in with it.
+  local money = QuestMoney()
+  if QuestInfoFrame then
+    QuestInfoFrame.itemChoice = choice
+  end
+  if money > 0 and StaticPopup_Show then
+    local dialog = StaticPopup_Show("CONFIRM_COMPLETE_EXPENSIVE_QUEST")
+    if dialog then
+      if QuestFrame then
+        QuestFrame.dialog = dialog
+      end
+      if MoneyFrame_Update and dialog.MoneyFrame then
+        MoneyFrame_Update(dialog.MoneyFrame, money)
+      end
+      -- The popup turns the quest in later, and it reads this value then.
+      if QuestInfoFrame then
+        QuestInfoFrame.itemChoice = choice
+      end
+      applying = false
+      return true
+    end
+  end
+  if money <= 0 and GetQuestReward then
+    -- Do not write the choice again after this. A follow-up quest can open
+    -- before this function returns, and that screen has its own rewards.
+    pcall(GetQuestReward, choice)
+    applying = false
+    return true
+  end
+  if QuestInfoFrame then
+    QuestInfoFrame.itemChoice = choice
+  end
+  local turnedIn = Click(ForwardButton("reward"))
+  if money > 0 and QuestInfoFrame then
+    QuestInfoFrame.itemChoice = choice
+  end
+  applying = false
+  return turnedIn and true or false
 end
 
 local function Confirm(mode, entries)
@@ -554,9 +688,9 @@ local function Confirm(mode, entries)
       return ActivateGossip(entry.elementData)
     end
     if entry.kind == "reward" then
-      local selected = SelectReward(entry.button)
-      local completed = Click(ForwardButton("reward"))
-      return selected or completed
+      local row = Logic.RewardRow(index, #entries, GameRewardChoice(), chosenReward)
+      entry = entries[row]
+      return TurnInReward(entry, row)
     end
     return Click(entry.button)
   end
@@ -604,7 +738,11 @@ local function Move(direction)
   end
   Remember(mode, entries)
   index = Logic.Move(index, #entries, direction)
-  Highlight(entries[index], true, true)
+  local entry = entries[index]
+  if entry and entry.kind == "reward" then
+    chosenReward = entry.choice
+  end
+  Highlight(entry, true, true)
   return true
 end
 
@@ -774,10 +912,34 @@ local function ShowLegend(mode)
   legend:Show()
 end
 
+local function RestoreReward(entries)
+  if not chosenReward or not entries[chosenReward] then
+    return
+  end
+  local current = GameRewardChoice()
+  if current == chosenReward then
+    return
+  end
+  -- A click already selected a real row. Leave that highlight where it is.
+  if current and current >= 1 and current <= #entries then
+    return
+  end
+  applying = true
+  SelectReward(entries[chosenReward].button, chosenReward)
+  if QuestInfoFrame then
+    QuestInfoFrame.itemChoice = chosenReward
+  end
+  applying = false
+end
+
 local function Refresh()
+  if applying then
+    return
+  end
   local mode = Mode()
   if not mode or not Enabled() then
     index = 1
+    chosenReward = nil
     lastMode = nil
     lastKeys = nil
     ClearHighlight()
@@ -792,10 +954,23 @@ local function Refresh()
     watcher:Show()
   end
   local entries = Entries(mode)
-  Remember(mode, entries)
+  local _, held = Remember(mode, entries)
+  if mode == "reward" and not held and #entries > 0 then
+    local picked = GameRewardChoice()
+    local row = Logic.RewardRow(index, #entries, picked, chosenReward)
+    if picked and picked >= 1 and picked <= #entries then
+      chosenReward = picked
+    end
+    if row and chosenReward then
+      index = row
+    end
+  end
   if entries[index] then
     Highlight(entries[index], false)
-  else
+    if mode == "reward" then
+      RestoreReward(entries)
+    end
+  elseif not held then
     ClearHighlight()
   end
   ShowLegend(mode)
@@ -804,8 +979,15 @@ end
 
 local refreshQueued = false
 local function QueueRefresh()
-  Refresh()
-  if refreshQueued or not C_Timer or not C_Timer.After then
+  -- Next frame, not now. Drawing the rewards queries the items, and that
+  -- calls in here again before every choice button exists. Refreshing in
+  -- the middle of that draw kept only the first button, so the cursor
+  -- jumped back to the top slot.
+  if refreshQueued then
+    return
+  end
+  if not C_Timer or not C_Timer.After then
+    Refresh()
     return
   end
   refreshQueued = true
@@ -831,7 +1013,32 @@ local function WatchScroll(box)
   end)
 end
 
+local rewardClickHooked = false
+local function WatchRewardClicks()
+  if rewardClickHooked or not hooksecurefunc or type(QuestInfoItem_OnClick) ~= "function" then
+    return
+  end
+  rewardClickHooked = true
+  hooksecurefunc("QuestInfoItem_OnClick", function(button)
+    if applying or Mode() ~= "reward" or not button then
+      return
+    end
+    local entries = RewardEntries()
+    for i = 1, #entries do
+      if entries[i].button == button then
+        index = i
+        chosenReward = entries[i].choice
+        lastMode = "reward"
+        lastKeys = CopyKeys(entries)
+        ShowCursor(button, false)
+        return
+      end
+    end
+  end)
+end
+
 local function EnsureHooks()
+  WatchRewardClicks()
   if GossipFrame and GossipFrame.GreetingPanel then
     WatchScroll(GossipFrame.GreetingPanel.ScrollBox)
   end

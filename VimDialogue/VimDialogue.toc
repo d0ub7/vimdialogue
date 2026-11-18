@@ -2,7 +2,7 @@
 ## Title: Vim Dialogue
 ## Notes: Vim keys for dialogue. j and k move, space and enter confirm, escape goes back.
 ## Author: Vim Dialogue
-## Version: 1.1.0
+## Version: 1.1.1
 ## SavedVariables: VimDialogueDB
 ## Category: Quests
 ## AllowLoadGameType: forever, camelot

@@ -160,6 +160,53 @@ function Logic.KeepIndex(state, mode, keys)
   return index
 end
 
+local function InList(value, count)
+  value = tonumber(value)
+  if not value or value < 1 or value > count then
+    return nil
+  end
+  return math.floor(value)
+end
+
+-- The row space should turn in. A click stores its choice on the quest
+-- frame, and that wins over the cursor: space used to stamp the cursor back
+-- onto the row, and the cursor starts on the first reward. A redraw stores 0,
+-- so the last row the keys or a click picked is next.
+function Logic.RewardRow(index, count, itemChoice, chosen)
+  count = tonumber(count) or 0
+  if count < 1 then
+    return nil
+  end
+  return InList(itemChoice, count) or InList(chosen, count) or InList(index, count) or 1
+end
+
+-- The reward panel hides, or its buttons are only partly built, while the
+-- quest frame stays open. Keep the row. The same rewards come back.
+function Logic.HeldIndex(state, mode, keys)
+  if type(state) ~= "table" or state.mode ~= "reward" then
+    return nil
+  end
+  if mode ~= "quest" and mode ~= "reward" then
+    return nil
+  end
+  local index = tonumber(state.index) or 1
+  if index < 1 then
+    index = 1
+  end
+  if type(keys) ~= "table" or #keys == 0 then
+    return index
+  end
+  if mode ~= "reward" or type(state.keys) ~= "table" or #keys >= #state.keys then
+    return nil
+  end
+  for i = 1, #keys do
+    if state.keys[i] ~= keys[i] then
+      return nil
+    end
+  end
+  return index
+end
+
 function Logic.Command(text)
   if type(text) ~= "string" then
     text = ""

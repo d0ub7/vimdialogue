@@ -95,6 +95,24 @@ check("same rows keep the cursor", function()
   eq(Logic.KeepIndex(state, "gossip", { "5:1", "4:2" }), 2)
 end)
 
+check("space keeps the reward the click picked", function()
+  eq(Logic.RewardRow(1, 4, 3, nil), 3)
+  eq(Logic.RewardRow(1, 4, 0, 3), 3)
+  eq(Logic.RewardRow(2, 4, nil, nil), 2)
+  eq(Logic.RewardRow(9, 4, 0, nil), 1)
+  eq(Logic.RewardRow(1, 0, 1, 1), nil)
+end)
+
+check("a reward redraw keeps the row", function()
+  local state = { mode = "reward", keys = { "choice:1", "choice:2", "choice:3" }, index = 3 }
+  eq(Logic.HeldIndex(state, "quest", {}), 3)
+  eq(Logic.HeldIndex(state, "reward", {}), 3)
+  eq(Logic.HeldIndex(state, "reward", { "choice:1" }), 3)
+  eq(Logic.HeldIndex(state, "reward", { "choice:1", "choice:2", "choice:3" }), nil)
+  eq(Logic.HeldIndex(state, "gossip", {}), nil)
+  eq(Logic.HeldIndex(state, "reward", { "choice:9" }), nil)
+end)
+
 check("a new list starts at the top", function()
   local state = { mode = "gossip", keys = { "5:1" }, index = 1 }
   eq(Logic.KeepIndex(state, "gossip", { "5:9", "3:4" }), 1)
