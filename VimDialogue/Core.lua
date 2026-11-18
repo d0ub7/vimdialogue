@@ -16,7 +16,7 @@ if type(ADDON) ~= "string" or ADDON == "" then
 end
 
 VimDialogue = VimDialogue or {}
-VimDialogue.version = "1.1.1"
+VimDialogue.version = "1.1.2"
 
 local index = 1
 local chosenReward = nil
@@ -780,23 +780,29 @@ local function SetFallback(on)
       if enable and not frame.questHotkeysKey then
         frame.questHotkeysKey = true
         local handler = function(self, key)
-          if bindingsOn or Modified() then
-            if self.SetPropagateKeyboardInput then
-              self:SetPropagateKeyboardInput(true)
+          -- Swallowing a key is protected. In combat the client blocks the
+          -- call and reports ADDON_ACTION_BLOCKED, so leave the key alone.
+          if InCombat() then
+            return
+          end
+          local function propagate(value)
+            if not self.SetPropagateKeyboardInput then
+              return true
             end
+            return pcall(self.SetPropagateKeyboardInput, self, value)
+          end
+          if bindingsOn or Modified() then
+            propagate(true)
             return
           end
           local action = Logic.Action(key)
           if not action then
-            if self.SetPropagateKeyboardInput then
-              self:SetPropagateKeyboardInput(true)
-            end
+            propagate(true)
             return
           end
-          if self.SetPropagateKeyboardInput then
-            self:SetPropagateKeyboardInput(false)
+          if propagate(false) then
+            Run(action)
           end
-          Run(action)
         end
         if frame:GetScript("OnKeyDown") then
           frame:HookScript("OnKeyDown", handler)
@@ -804,21 +810,21 @@ local function SetFallback(on)
           frame:SetScript("OnKeyDown", handler)
         end
       end
-      frame:EnableKeyboard(enable and true or false)
+      -- EnableKeyboard is refused in combat, same as the propagate call.
+      if not InCombat() then
+        frame:EnableKeyboard(enable and true or false)
+      end
     end
   end
 end
 
 local function ApplyBindings()
-  -- Override bindings are refused in combat. A window opened in combat uses
-  -- the frame's own key handler instead. Bindings already in place are left
-  -- alone until combat ends, because they cannot be cleared either.
+  -- Override bindings are refused in combat, and so is swallowing a key.
+  -- Bindings already in place are left alone until combat ends, because
+  -- they cannot be cleared either. A window opened in combat waits.
   local open = Logic.ShouldBind(Enabled(), DialogueOpen(), Typing(), false)
   if InCombat() then
     bindPending = true
-    if not bindingsOn then
-      SetFallback(open)
-    end
     return
   end
   bindPending = false
